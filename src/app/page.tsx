@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
 import {
   Activity,
   ArrowDownToLine,
@@ -46,18 +47,6 @@ type Order = {
   status: string;
 };
 
-const services: Service[] = [
-  { id: 101, name: "Instagram Followers | Standard", category: "Followers", platform: "Instagram", price: 85, min: 100, max: 100000 },
-  { id: 102, name: "Instagram Likes | Standard", category: "Likes", platform: "Instagram", price: 35, min: 50, max: 50000 },
-  { id: 103, name: "Instagram Reel Views", category: "Views", platform: "Instagram", price: 12, min: 100, max: 1000000 },
-  { id: 201, name: "YouTube Views | Standard", category: "Views", platform: "YouTube", price: 120, min: 100, max: 100000 },
-  { id: 202, name: "YouTube Subscribers", category: "Subscribers", platform: "YouTube", price: 450, min: 50, max: 10000 },
-  { id: 301, name: "Telegram Channel Members", category: "Members", platform: "Telegram", price: 180, min: 100, max: 50000 },
-  { id: 302, name: "Telegram Post Views", category: "Views", platform: "Telegram", price: 25, min: 100, max: 100000 },
-  { id: 401, name: "TikTok Video Views", category: "Views", platform: "TikTok", price: 18, min: 100, max: 500000 },
-  { id: 402, name: "TikTok Likes", category: "Likes", platform: "TikTok", price: 55, min: 100, max: 50000 },
-];
-
 const money = (value: number) =>
   new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -81,7 +70,9 @@ export default function Home() {
   const [mobileMenu, setMobileMenu] = useState(false);
   const [search, setSearch] = useState("");
   const [platform, setPlatform] = useState("All Platforms");
-  const [selectedService, setSelectedService] = useState("101");
+  const [services, setServices] = useState<Service[]>([]);
+  const [servicesLoading, setServicesLoading] = useState(true);
+  const [selectedService, setSelectedService] = useState("");
   const [link, setLink] = useState("");
   const [quantity, setQuantity] = useState("100");
   const [orders, setOrders] = useState<Order[]>([]);
@@ -89,15 +80,63 @@ export default function Home() {
   const [balance] = useState(0);
   const [fundAmount, setFundAmount] = useState("500");
 
-  const service = services.find((s) => s.id === Number(selectedService)) || services[0];
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadServices() {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("services")
+        .select(
+          "id, name, platform, description, price_per_1000, min_quantity, max_quantity"
+        )
+        .eq("active", true)
+        .order("id");
+
+      if (cancelled) return;
+
+      if (error) {
+        console.error("Services load error:", error.message);
+        notify("Services load nahi ho paayi. Please refresh karke try karein.");
+        setServicesLoading(false);
+        return;
+      }
+
+      const mapped: Service[] = (data ?? []).map((item) => ({
+        id: Number(item.id),
+        name: item.name,
+        category: item.description ?? item.platform,
+        platform: item.platform,
+        price: Number(item.price_per_1000),
+        min: Number(item.min_quantity),
+        max: Number(item.max_quantity),
+      }));
+
+      setServices(mapped);
+      setSelectedService((current) =>
+        mapped.some((item) => String(item.id) === current)
+          ? current
+          : mapped.length > 0
+            ? String(mapped[0].id)
+            : ""
+      );
+      setServicesLoading(false);
+    }
+
+    loadServices();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const service = services.find((s) => s.id === Number(selectedService));
   const qty = Number(quantity) || 0;
-  const charge = (service.price * qty) / 1000;
+  const charge = service ? (service.price * qty) / 1000 : 0;
 
   const filteredServices = services.filter((s) => {
-    const matchesSearch =
-      `${s.name} ${s.platform} ${s.category}`
-        .toLowerCase()
-        .includes(search.toLowerCase());
+    const matchesSearch = `${s.name} ${s.platform} ${s.category}`
+      .toLowerCase()
+      .includes(search.toLowerCase());
     const matchesPlatform =
       platform === "All Platforms" || s.platform === platform;
     return matchesSearch && matchesPlatform;
@@ -109,6 +148,10 @@ export default function Home() {
   }
 
   function placeOrder() {
+    if (!service) {
+      notify("Please select an available service.");
+      return;
+    }
     if (!link.trim()) {
       notify("Please enter the post, profile or channel URL.");
       return;
@@ -149,10 +192,30 @@ export default function Home() {
   }
 
   const stats = [
-    { label: "Total Orders", value: String(orders.length), note: "Orders in this session", icon: ShoppingCart },
-    { label: "Wallet Balance", value: money(balance), note: "Demo balance", icon: Wallet },
-    { label: "Services", value: String(services.length), note: "Sample services", icon: Package },
-    { label: "Completed Orders", value: "0", note: "No live order data", icon: CheckCircle2 },
+    {
+      label: "Total Orders",
+      value: String(orders.length),
+      note: "Orders in this session",
+      icon: ShoppingCart,
+    },
+    {
+      label: "Wallet Balance",
+      value: money(balance),
+      note: "Demo balance",
+      icon: Wallet,
+    },
+    {
+      label: "Services",
+      value: servicesLoading ? "…" : String(services.length),
+      note: "Database services",
+      icon: Package,
+    },
+    {
+      label: "Completed Orders",
+      value: "0",
+      note: "No live order data",
+      icon: CheckCircle2,
+    },
   ];
 
   return (
@@ -188,7 +251,11 @@ export default function Home() {
             <div className="text-lg font-extrabold tracking-tight">SocialFlow</div>
             <div className="text-xs text-slate-500">SMM Management</div>
           </div>
-          <button className="ml-auto lg:hidden" onClick={() => setMobileMenu(false)} aria-label="Close menu">
+          <button
+            className="ml-auto lg:hidden"
+            onClick={() => setMobileMenu(false)}
+            aria-label="Close menu"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -253,7 +320,11 @@ export default function Home() {
       <div className="min-h-screen lg:pl-64">
         <header className="sticky top-0 z-30 flex h-20 items-center justify-between border-b border-slate-200 bg-white/90 px-4 backdrop-blur md:px-8">
           <div className="flex items-center gap-3">
-            <button className="rounded-lg p-2 hover:bg-slate-100 lg:hidden" onClick={() => setMobileMenu(true)} aria-label="Open menu">
+            <button
+              className="rounded-lg p-2 hover:bg-slate-100 lg:hidden"
+              onClick={() => setMobileMenu(true)}
+              aria-label="Open menu"
+            >
               <Menu className="h-5 w-5" />
             </button>
             <div>
@@ -267,11 +338,18 @@ export default function Home() {
               <span className="text-xs text-slate-500">Balance</span>
               <span className="text-sm font-bold">{money(balance)}</span>
             </div>
-            <button className="relative rounded-xl border border-slate-200 p-2.5 hover:bg-slate-50" aria-label="Notifications" onClick={() => notify("You are all caught up.")}>
+            <button
+              className="relative rounded-xl border border-slate-200 p-2.5 hover:bg-slate-50"
+              aria-label="Notifications"
+              onClick={() => notify("You are all caught up.")}
+            >
               <Bell className="h-5 w-5 text-slate-500" />
               <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-indigo-500" />
             </button>
-            <button onClick={() => goTo("Settings")} className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold sm:flex">
+            <button
+              onClick={() => goTo("Settings")}
+              className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold sm:flex"
+            >
               <Settings className="h-4 w-4" /> Settings
               <ChevronDown className="h-4 w-4 text-slate-400" />
             </button>
@@ -323,8 +401,7 @@ export default function Home() {
                     </div>
                   );
                 })}
-              </section>
-
+              </section> 
               <section className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
                 <div className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6">
                   <div className="flex items-center justify-between gap-4">
@@ -367,7 +444,7 @@ export default function Home() {
                   <div className="mt-5 space-y-3">
                     {[
                       { label: "Place a new order", detail: "Choose a service and quantity", icon: ShoppingCart, target: "New Order" },
-                      { label: "Browse services", detail: "Explore available sample services", icon: Package, target: "Services" },
+                      { label: "Browse services", detail: "Explore available database services", icon: Package, target: "Services" },
                       { label: "Add funds", detail: "View demo wallet options", icon: CreditCard, target: "Add Funds" },
                     ].map((action) => {
                       const Icon = action.icon;
@@ -401,7 +478,7 @@ export default function Home() {
               <section className="rounded-2xl border border-slate-200 bg-white p-5 md:p-7">
                 <div className="mb-6">
                   <h2 className="text-xl font-extrabold">Create New Order</h2>
-                  <p className="mt-1 text-sm text-slate-500">Choose a sample service and enter the order details.</p>
+                  <p className="mt-1 text-sm text-slate-500">Choose an available database service and enter the order details.</p>
                 </div>
                 <div className="space-y-5">
                   <div>
@@ -420,7 +497,9 @@ export default function Home() {
                   </div>
                   <div>
                     <label className="mb-2 block text-sm font-bold">Service</label>
+                    {servicesLoading ? <p className="text-sm text-slate-500">Loading services…</p> : services.length === 0 ? <p className="text-sm text-amber-700">No active services found. Add services in Supabase first.</p> : null}
                     <select
+                      disabled={servicesLoading || services.length === 0}
                       value={selectedService}
                       onChange={(e) => setSelectedService(e.target.value)}
                       className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
@@ -437,10 +516,10 @@ export default function Home() {
                   </div>
                   <div>
                     <label className="mb-2 block text-sm font-bold">Quantity</label>
-                    <input type="number" min={service.min} max={service.max} value={quantity} onChange={(e) => setQuantity(e.target.value)} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" />
-                    <div className="mt-2 flex justify-between text-xs text-slate-500"><span>Minimum: {service.min.toLocaleString("en-IN")}</span><span>Maximum: {service.max.toLocaleString("en-IN")}</span></div>
+                    <input type="number" min={service?.min ?? 1} max={service?.max ?? 1000000} value={quantity} onChange={(e) => setQuantity(e.target.value)} disabled={!service} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" />
+                    <div className="mt-2 flex justify-between text-xs text-slate-500"><span>Minimum: {service ? service.min.toLocaleString("en-IN") : "—"}</span><span>Maximum: {service ? service.max.toLocaleString("en-IN") : "—"}</span></div>
                   </div>
-                  <button onClick={placeOrder} className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-100 transition hover:bg-indigo-700">
+                  <button onClick={placeOrder} disabled={!service || servicesLoading} className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-100 transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50">
                     <ShoppingCart className="h-4 w-4" /> Submit Demo Order
                   </button>
                   <p className="text-center text-xs leading-5 text-slate-500">Demo only: this will not send an order to a supplier.</p>
@@ -451,9 +530,9 @@ export default function Home() {
                 <h3 className="font-extrabold">Order Summary</h3>
                 <div className="mt-5 rounded-xl bg-slate-50 p-4">
                   <div className="text-xs text-slate-500">Selected service</div>
-                  <div className="mt-1 text-sm font-bold">{service.name}</div>
-                  <div className="mt-3 flex items-center justify-between text-xs text-slate-500"><span>Platform</span><span className="font-semibold text-slate-700">{service.platform}</span></div>
-                  <div className="mt-2 flex items-center justify-between text-xs text-slate-500"><span>Rate per 1,000</span><span className="font-semibold text-slate-700">{money(service.price)}</span></div>
+                  <div className="mt-1 text-sm font-bold">{service?.name ?? (servicesLoading ? "Loading services…" : "No service selected")}</div>
+                  <div className="mt-3 flex items-center justify-between text-xs text-slate-500"><span>Platform</span><span className="font-semibold text-slate-700">{service?.platform ?? "—"}</span></div>
+                  <div className="mt-2 flex items-center justify-between text-xs text-slate-500"><span>Rate per 1,000</span><span className="font-semibold text-slate-700">{service ? money(service.price) : "—"}</span></div>
                   <div className="mt-2 flex items-center justify-between text-xs text-slate-500"><span>Quantity</span><span className="font-semibold text-slate-700">{qty.toLocaleString("en-IN")}</span></div>
                   <div className="mt-4 border-t border-slate-200 pt-4">
                     <div className="flex items-center justify-between"><span className="text-sm font-bold">Estimated charge</span><span className="text-xl font-extrabold text-indigo-700">{money(charge)}</span></div>
@@ -472,7 +551,7 @@ export default function Home() {
               <div className="flex flex-col gap-4 border-b border-slate-100 p-5 md:flex-row md:items-center md:justify-between md:p-6">
                 <div>
                   <h2 className="text-lg font-extrabold">Service Catalogue</h2>
-                  <p className="mt-1 text-sm text-slate-500">{filteredServices.length} sample services</p>
+                  <p className="mt-1 text-sm text-slate-500">{filteredServices.length} available services</p>
                 </div>
                 <div className="flex flex-col gap-3 sm:flex-row">
                   <div className="flex items-center gap-2 rounded-xl border border-slate-200 px-3">
@@ -503,15 +582,19 @@ export default function Home() {
                   </tbody>
                 </table>
               </div>
-              <div className="border-t border-slate-100 p-4 text-xs text-slate-500">All service names and prices are demo data. Supplier API integration is not connected.</div>
+              <div className="border-t border-slate-100 p-4 text-xs text-slate-500">Services are loaded from your Supabase database. Supplier API integration is not connected.</div>
             </section>
           )}
-
-          {page === "Order History" && (
+                    {page === "Order History" && (
             <section className="rounded-2xl border border-slate-200 bg-white">
               <div className="flex items-center justify-between border-b border-slate-100 p-5 md:p-6">
-                <div><h2 className="text-lg font-extrabold">Order History</h2><p className="mt-1 text-sm text-slate-500">Demo orders from the current session</p></div>
-                <button onClick={() => goTo("New Order")} className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white"><Plus className="h-4 w-4" /> New Order</button>
+                <div>
+                  <h2 className="text-lg font-extrabold">Order History</h2>
+                  <p className="mt-1 text-sm text-slate-500">Demo orders from the current session</p>
+                </div>
+                <button onClick={() => goTo("New Order")} className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white">
+                  <Plus className="h-4 w-4" /> New Order
+                </button>
               </div>
               {orders.length === 0 ? (
                 <div className="flex flex-col items-center py-16 text-center">
@@ -523,9 +606,22 @@ export default function Home() {
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[720px] text-left text-sm">
-                    <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-5 py-4">Order ID</th><th className="px-5 py-4">Service</th><th className="px-5 py-4">Quantity</th><th className="px-5 py-4">Charge</th><th className="px-5 py-4">Status</th></tr></thead>
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                      <tr><th className="px-5 py-4">Order ID</th><th className="px-5 py-4">Service</th><th className="px-5 py-4">Quantity</th><th className="px-5 py-4">Charge</th><th className="px-5 py-4">Status</th></tr>
+                    </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {orders.map((o) => <tr key={o.id}><td className="px-5 py-4 font-mono text-xs">{o.id}</td><td className="px-5 py-4"><div className="font-bold">{o.service}</div><a className="mt-1 block max-w-xs truncate text-xs text-indigo-600" href={o.link} target="_blank" rel="noreferrer">{o.link}</a></td><td className="px-5 py-4">{o.quantity.toLocaleString("en-IN")}</td><td className="px-5 py-4 font-bold">{money(o.charge)}</td><td className="px-5 py-4"><span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-700">{o.status}</span></td></tr>)}
+                      {orders.map((o) => (
+                        <tr key={o.id}>
+                          <td className="px-5 py-4 font-mono text-xs">{o.id}</td>
+                          <td className="px-5 py-4">
+                            <div className="font-bold">{o.service}</div>
+                            <a className="mt-1 block max-w-xs truncate text-xs text-indigo-600" href={o.link} target="_blank" rel="noreferrer">{o.link}</a>
+                          </td>
+                          <td className="px-5 py-4">{o.quantity.toLocaleString("en-IN")}</td>
+                          <td className="px-5 py-4 font-bold">{money(o.charge)}</td>
+                          <td className="px-5 py-4"><span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-700">{o.status}</span></td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -546,16 +642,29 @@ export default function Home() {
                 <label className="mb-2 mt-6 block text-sm font-bold">Amount (INR)</label>
                 <input type="number" min="100" value={fundAmount} onChange={(e) => setFundAmount(e.target.value)} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" />
                 <div className="mt-3 grid grid-cols-3 gap-2">
-                  {["500", "1000", "2000"].map((amount) => <button key={amount} onClick={() => setFundAmount(amount)} className={`rounded-xl border px-3 py-2.5 text-sm font-bold ${fundAmount === amount ? "border-indigo-600 bg-indigo-50 text-indigo-700" : "border-slate-200 hover:bg-slate-50"}`}>₹{amount}</button>)}
+                  {["500", "1000", "2000"].map((amount) => (
+                    <button key={amount} onClick={() => setFundAmount(amount)} className={`rounded-xl border px-3 py-2.5 text-sm font-bold ${fundAmount === amount ? "border-indigo-600 bg-indigo-50 text-indigo-700" : "border-slate-200 hover:bg-slate-50"}`}>₹{amount}</button>
+                  ))}
                 </div>
-                <button onClick={() => notify("Payments are not configured yet. No money was charged.")} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3.5 text-sm font-bold text-white hover:bg-indigo-700"><CreditCard className="h-4 w-4" /> Continue to Payment</button>
+                <button onClick={() => notify("Payments are not configured yet. No money was charged.")} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3.5 text-sm font-bold text-white hover:bg-indigo-700">
+                  <CreditCard className="h-4 w-4" /> Continue to Payment
+                </button>
                 <p className="mt-3 text-center text-xs leading-5 text-slate-500">Payment gateway not connected. This button will not charge you.</p>
               </section>
+
               <section className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6">
                 <h3 className="font-extrabold">Payment Methods</h3>
                 <div className="mt-4 space-y-3">
-                  <div className="flex items-center gap-3 rounded-xl border border-slate-200 p-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700"><CreditCard className="h-5 w-5" /></div><div><div className="text-sm font-bold">UPI / QR</div><div className="mt-1 text-xs text-slate-500">Integration pending</div></div><span className="ml-auto text-xs text-amber-600">Setup needed</span></div>
-                  <div className="flex items-center gap-3 rounded-xl border border-slate-200 p-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50 text-violet-700"><Globe className="h-5 w-5" /></div><div><div className="text-sm font-bold">USDT BEP20</div><div className="mt-1 text-xs text-slate-500">Payment verification pending</div></div><span className="ml-auto text-xs text-amber-600">Setup needed</span></div>
+                  <div className="flex items-center gap-3 rounded-xl border border-slate-200 p-4">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700"><CreditCard className="h-5 w-5" /></div>
+                    <div><div className="text-sm font-bold">UPI / QR</div><div className="mt-1 text-xs text-slate-500">Integration pending</div></div>
+                    <span className="ml-auto text-xs text-amber-600">Setup needed</span>
+                  </div>
+                  <div className="flex items-center gap-3 rounded-xl border border-slate-200 p-4">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50 text-violet-700"><Globe className="h-5 w-5" /></div>
+                    <div><div className="text-sm font-bold">USDT BEP20</div><div className="mt-1 text-xs text-slate-500">Payment verification pending</div></div>
+                    <span className="ml-auto text-xs text-amber-600">Setup needed</span>
+                  </div>
                 </div>
                 <div className="mt-5 rounded-xl bg-slate-50 p-4 text-xs leading-5 text-slate-600">Before enabling deposits, configure a suitable payment provider, transaction verification, reconciliation and refund handling.</div>
               </section>
@@ -565,7 +674,13 @@ export default function Home() {
           {page === "Admin Panel" && (
             <div className="space-y-6">
               <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5 text-indigo-900">
-                <div className="flex items-start gap-3"><ShieldCheck className="mt-0.5 h-6 w-6 shrink-0" /><div><h2 className="font-extrabold">Admin Preview</h2><p className="mt-1 text-sm leading-6">This is a visual preview only. There is no real admin authentication or server-side authorization yet.</p></div></div>
+                <div className="flex items-start gap-3">
+                  <ShieldCheck className="mt-0.5 h-6 w-6 shrink-0" />
+                  <div>
+                    <h2 className="font-extrabold">Admin Preview</h2>
+                    <p className="mt-1 text-sm leading-6">This is a visual preview only. There is no real admin authentication or server-side authorization yet.</p>
+                  </div>
+                </div>
               </div>
               <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {[
@@ -575,7 +690,17 @@ export default function Home() {
                   { title: "Customer Accounts", detail: "Account and access management", icon: ShieldCheck },
                   { title: "Supplier API", detail: "Server-side connection configuration", icon: Globe },
                   { title: "Panel Settings", detail: "Branding and general configuration", icon: Settings },
-                ].map((item) => { const Icon = item.icon; return <div key={item.title} className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600"><Icon className="h-5 w-5" /></div><h3 className="mt-4 font-extrabold">{item.title}</h3><p className="mt-1 text-sm leading-6 text-slate-500">{item.detail}</p><button onClick={() => notify("This admin function requires a secure backend.")} className="mt-4 text-xs font-bold text-indigo-600">Configure later <ArrowUpRight className="ml-1 inline h-3 w-3" /></button></div>; })}
+                ].map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <div key={item.title} className="rounded-2xl border border-slate-200 bg-white p-5">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600"><Icon className="h-5 w-5" /></div>
+                      <h3 className="mt-4 font-extrabold">{item.title}</h3>
+                      <p className="mt-1 text-sm leading-6 text-slate-500">{item.detail}</p>
+                      <button onClick={() => notify("This admin function requires a secure backend.")} className="mt-4 text-xs font-bold text-indigo-600">Configure later <ArrowUpRight className="ml-1 inline h-3 w-3" /></button>
+                    </div>
+                  );
+                })}
               </section>
             </div>
           )}
@@ -586,7 +711,18 @@ export default function Home() {
               <h2 className="mt-4 text-xl font-extrabold">How can we help?</h2>
               <p className="mt-2 text-sm leading-6 text-slate-500">Support tickets need a backend and a support contact. This page is currently a preview.</p>
               <div className="mt-6 space-y-3">
-                {["How do I place an order?", "How do wallet deposits work?", "Where can I check my order status?"].map((q, i) => <details key={q} className="rounded-xl border border-slate-200 p-4"><summary className="cursor-pointer text-sm font-bold">{q}</summary><p className="mt-3 text-sm leading-6 text-slate-500">{["Open New Order, select a service, enter the target URL and quantity, then submit. In this demo no real supplier order is created.", "The wallet screen is only a preview. No payments or deposits are processed yet.", "Order History shows demo orders created during the current browser session."][i]}</p></details>)}
+                {["How do I place an order?", "How do wallet deposits work?", "Where can I check my order status?"].map((q, i) => (
+                  <details key={q} className="rounded-xl border border-slate-200 p-4">
+                    <summary className="cursor-pointer text-sm font-bold">{q}</summary>
+                    <p className="mt-3 text-sm leading-6 text-slate-500">
+                      {[
+                        "Open New Order, select a service, enter the target URL and quantity, then submit. In this demo no real supplier order is created.",
+                        "The wallet screen is only a preview. No payments or deposits are processed yet.",
+                        "Order History shows demo orders created during the current browser session.",
+                      ][i]}
+                    </p>
+                  </details>
+                ))}
               </div>
             </section>
           )}
